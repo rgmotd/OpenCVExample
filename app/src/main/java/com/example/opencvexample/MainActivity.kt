@@ -1,17 +1,17 @@
 package com.example.opencvexample
 
 import android.os.Bundle
+import android.util.Log
 import android.view.View
 import androidx.appcompat.app.AppCompatActivity
 import com.example.opencvexample.databinding.ActivityMainBinding
 import org.opencv.android.BaseLoaderCallback
 import org.opencv.android.CameraBridgeViewBase
 import org.opencv.android.OpenCVLoader
-import org.opencv.core.Core
+import org.opencv.core.*
 import org.opencv.core.Core.flip
-import org.opencv.core.CvType
-import org.opencv.core.Mat
 import org.opencv.imgproc.Imgproc
+import java.util.*
 
 
 class MainActivity : AppCompatActivity(), CameraBridgeViewBase.CvCameraViewListener2 {
@@ -57,32 +57,91 @@ class MainActivity : AppCompatActivity(), CameraBridgeViewBase.CvCameraViewListe
     override fun onCameraViewStopped() {
     }
 
-    fun rot90(matImage: Mat, rotflag: Int): Mat? {
-        //1=CW, 2=CCW, 3=180
-        var rotated: Mat? = Mat()
-        if (rotflag == 1) {
-            rotated = matImage.t()
-            flip(rotated, rotated, 1) //transpose+flip(1)=CW
-        } else if (rotflag == 2) {
-            rotated = matImage.t()
-            flip(rotated, rotated, 0) //transpose+flip(0)=CCW
-        } else if (rotflag == 3) {
-            flip(matImage, rotated, -1) //flip(-1)=180
-        } else if (rotflag != 0) { //if not 0,1,2,3:
+    override fun onCameraFrame(inputFrame: CameraBridgeViewBase.CvCameraViewFrame?): Mat {
+        val mRgba = inputFrame?.rgba()!!
+
+        val contours = findContours(mRgba)
+        Imgproc.drawContours(mRgba, findContours(mRgba), 0, Scalar(0.0, 255.0, 0.0), 5)
+        val quad = getQuadrilateral(contours)
+        quad?.points?.forEach {
+            Log.d("DWAKWADKDAWKWADKWAKD", "${it.x} ${it.y}")
         }
-        return rotated
+        val points = quad?.points?.map { MatOfPoint(it) }
+        Imgproc.drawContours(mRgba, points, 0, Scalar(255.0, 0.0, 0.0), 15)
+
+        return mRgba
     }
 
-    override fun onCameraFrame(inputFrame: CameraBridgeViewBase.CvCameraViewFrame?): Mat {
-        val img: Mat? = inputFrame?.rgba()
+    private fun findContours(src: Mat): ArrayList<MatOfPoint> {
+        val ratio = src.size().height / 500
+        val height = java.lang.Double.valueOf(src.size().height / ratio).toInt()
+        val width = java.lang.Double.valueOf(src.size().width / ratio).toInt()
+        val size = Size(width.toDouble(), height.toDouble())
+        val resizedImage = Mat(size, CvType.CV_8UC4)
+        val grayImage = Mat(size, CvType.CV_8UC4)
+        val cannedImage = Mat(size, CvType.CV_8UC1)
+        Imgproc.resize(src, resizedImage, size)
+        Imgproc.cvtColor(resizedImage, grayImage, Imgproc.COLOR_RGBA2GRAY, 4)
+        Imgproc.GaussianBlur(grayImage, grayImage, Size(5.0, 5.0), 0.0)
+        Imgproc.Canny(grayImage, cannedImage, 75.0, 200.0)
+        val contours = ArrayList<MatOfPoint>()
+        val hierarchy = Mat()
+        Imgproc.findContours(
+            cannedImage,
+            contours,
+            hierarchy,
+            Imgproc.RETR_LIST,
+            Imgproc.CHAIN_APPROX_SIMPLE
+        )
+        hierarchy.release()
+        contours.sortWith { lhs, rhs ->
+            java.lang.Double.valueOf(Imgproc.contourArea(rhs))
+                .compareTo(Imgproc.contourArea(lhs))
+        }
+        resizedImage.release()
+        grayImage.release()
+        cannedImage.release()
+        return contours
+    }
 
-        Imgproc.cvtColor(img, img, Imgproc.COLOR_RGB2BGRA)
+    private fun getQuadrilateral(contours: ArrayList<MatOfPoint>): Quadrilateral? {
+        for (c in contours) {
+            val c2f = MatOfPoint2f(*c.toArray())
+            val peri = Imgproc.arcLength(c2f, true)
+            val approx = MatOfPoint2f()
+            Imgproc.approxPolyDP(c2f, approx, 0.02 * peri, true)
+            val points = approx.toArray()
 
-        val imgResult = img!!.clone()
+            // select biggest 4 angles polygon
+            if (points.size == 4) {
+                val foundPoints: Array<Point> = sortPoints(points)
+                return Quadrilateral(c, foundPoints)
+            }
+        }
+        return null
+    }
 
-        Imgproc.Canny(img, imgResult, 80.0, 90.0)
+    class Quadrilateral(var contour: MatOfPoint, var points: Array<Point>)
 
+    private fun sortPoints(src: Array<Point>): Array<Point> {
+        val srcPoints: ArrayList<Point> = ArrayList(src.toList())
+        val result = arrayOf<Point>(Point(), Point(), Point(), Point())
+        val sumComparator: Comparator<Point> =
+            Comparator<Point> { lhs, rhs -> java.lang.Double.valueOf(lhs.y + lhs.x).compareTo(rhs.y + rhs.x) }
+        val diffComparator: Comparator<Point> =
+            Comparator<Point> { lhs, rhs -> java.lang.Double.valueOf(lhs.y - lhs.x).compareTo(rhs.y - rhs.x) }
 
-       return imgResult
+        // top-left corner = minimal sum
+        result[0] = Collections.min(srcPoints, sumComparator)
+
+        // bottom-right corner = maximal sum
+        result[2] = Collections.max(srcPoints, sumComparator)
+
+        // top-right corner = minimal diference
+        result[1] = Collections.min(srcPoints, diffComparator)
+
+        // bottom-left corner = maximal diference
+        result[3] = Collections.max(srcPoints, diffComparator)
+        return result
     }
 }
